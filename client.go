@@ -83,6 +83,8 @@ func (c *Client) connect(req *pb.ConnectRequest) (_ net.Conn, peer string, remai
 		return nil, "", 0, fmt.Errorf("couldn't read connection response: %w", err)
 	}
 
+	// TODO: check if resp.ConnectedPrincipal is one that we asked for (lol)
+
 	// Perform peer-to-peer handshake to verify peer.
 	if isServer := c.name < resp.ConnectedPrincipal; isServer {
 		conn = tls.Server(conn, &tls.Config{
