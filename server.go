@@ -21,6 +21,7 @@ import (
 // TODO: make logging optional, off by default
 // TODO: need to ignore "already closed" error on close attempts? (as in rspd) [if so, repeatedly call errors.Unwrap until we get a syscall.Errno, then check if the errno is ENOTCONN?]
 // TODO: port 10443 -> 443 (or configurable, or just take a net.Listener?)
+// TODO: check protocol-negotiation failures during handshake (per RFC 7301) [use GetConfigForClient]
 
 type Server struct {
 	cfg *tls.Config
