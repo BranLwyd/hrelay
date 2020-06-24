@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package hrelay;
+
+message ConnectRequest {
+	// If true, accept connection to any principal that wants to connect to us.
+	bool connect_any = 1;
+	// If non-empty, a list of principals that we want to connect to.
+	repeated string connect_principals = 2;
+}
+
+message ConnectResponse {
+	// The verified-by-relay name of the principal.
+	string connected_principal = 1;
+	// The number of additional connections that could have been connected to.
+	int64 remaining_connections = 2;
+}
