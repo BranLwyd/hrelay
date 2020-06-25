@@ -8,7 +8,6 @@ import (
 	"crypto/x509/pkix"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"math/big"
 	"sync"
 	"testing"
@@ -83,7 +82,6 @@ func TestSimpleConnection(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		log.Printf("Alice: %v [mutual: %v]", conn.(*tls.Conn).ConnectionState().NegotiatedProtocol, conn.(*tls.Conn).ConnectionState().NegotiatedProtocolIsMutual) // XXX
 		if peer != "bob" {
 			t.Errorf("Unexpected peer: want %q, got %q", "bob", peer)
 		}
@@ -122,7 +120,6 @@ func TestSimpleConnection(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		log.Printf("Bob: %v [mutual: %v]", conn.(*tls.Conn).ConnectionState().NegotiatedProtocol, conn.(*tls.Conn).ConnectionState().NegotiatedProtocolIsMutual) // XXX
 		if peer != "alice" {
 			t.Errorf("Unexpected peer: want %q, got %q", "alice", peer)
 		}
