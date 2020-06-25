@@ -83,7 +83,19 @@ func (c *Client) connect(req *pb.ConnectRequest) (_ net.Conn, peer string, remai
 		return nil, "", 0, fmt.Errorf("couldn't read connection response: %w", err)
 	}
 
-	// TODO: check if resp.ConnectedPrincipal is one that we asked for (lol)
+	// Make sure the peer the server connected us to is one that we want.
+	if !req.ConnectAny {
+		peerIsRequested := false
+		for _, p := range req.ConnectPrincipals {
+			if resp.ConnectedPrincipal == p {
+				peerIsRequested = true
+				break
+			}
+		}
+		if !peerIsRequested {
+			return nil, "", 0, fmt.Errorf("connected to unrequested peer")
+		}
+	}
 
 	// Perform peer-to-peer handshake to verify peer.
 	if isServer := c.name < resp.ConnectedPrincipal; isServer {
