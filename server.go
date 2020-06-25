@@ -20,7 +20,6 @@ import (
 // TODO: make logging optional, off by default
 // TODO: need to ignore "already closed" error on close attempts? (as in rspd) [if so, repeatedly call errors.Unwrap until we get a syscall.Errno, then check if the errno is ENOTCONN?]
 // TODO: port 10443 -> 443 (or configurable, or just take a net.Listener?)
-// TODO: check protocol-negotiation failures during handshake (per RFC 7301) [use GetConfigForClient]
 
 type Server struct {
 	cfg *tls.Config
@@ -40,14 +39,30 @@ type ServerConfig struct {
 func NewServer(cfg *ServerConfig) (*Server, error) {
 	// Set up TLS configuration.
 	tlsCFG := &tls.Config{
-		Certificates: []tls.Certificate{cfg.Certificate},
-		MinVersion:   tls.VersionTLS13,
-		ClientAuth:   tls.RequireAndVerifyClientCert,
-		ClientCAs:    cfg.ClientCAs,
-		NextProtos:   []string{"hrelay"},
+		GetConfigForClient: func(hi *tls.ClientHelloInfo) (*tls.Config, error) {
+			// Determine the client-requested protocol to use.
+			negotiatedProtocol := ""
+			for _, proto := range hi.SupportedProtos {
+				if proto == "hrelay" {
+					negotiatedProtocol = proto
+				}
+			}
+			if negotiatedProtocol == "" {
+				// Per RFC 7301, this should be a "no_application_protocol" alert, but Go's TLS library does not allow sending alerts.
+				// Returning an error from GetConfigForClient always causes an "internal error".
+				return nil, fmt.Errorf("protocol negoatiation failure")
+			}
+
+			return &tls.Config{
+				Certificates: []tls.Certificate{cfg.Certificate},
+				MinVersion:   tls.VersionTLS13,
+				ClientAuth:   tls.RequireAndVerifyClientCert,
+				ClientCAs:    cfg.ClientCAs,
+				NextProtos:   []string{negotiatedProtocol},
+			}, nil
+		},
 	}
 
-	// Start listening for connections.
 	return &Server{cfg: tlsCFG}, nil
 }
 
@@ -88,10 +103,6 @@ func (s *Server) handleConnection(conn *tls.Conn) {
 	}
 	if err := conn.SetDeadline(time.Time{}); err != nil {
 		s.clog(conn, "Couldn't unset handshake deadline: %v", err)
-		return
-	}
-	if cs := conn.ConnectionState(); !cs.NegotiatedProtocolIsMutual || cs.NegotiatedProtocol != "hrelay" {
-		s.clog(conn, "Protocol negotiaton failure (protocol = %q, mutual = %v)", cs.NegotiatedProtocol, cs.NegotiatedProtocolIsMutual)
 		return
 	}
 	principal, err := principal(conn.ConnectionState().VerifiedChains)
