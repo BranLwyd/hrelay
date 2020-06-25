@@ -17,7 +17,6 @@ import (
 // TODO: shutdown
 // TODO: add acme support (need to support GetCertificate, specifying additional NextProtos)
 // TODO: support conn liveness checking (need to get to SyscallConn, I think meaning I need to keep the underlying connection rather than just a *tls.Conn)
-// TODO: never match a client with itself (breaks peer-to-peer handshake -- no decision on which side is client vs server)
 // TODO: make logging optional, off by default
 // TODO: need to ignore "already closed" error on close attempts? (as in rspd) [if so, repeatedly call errors.Unwrap until we get a syscall.Errno, then check if the errno is ENOTCONN?]
 // TODO: port 10443 -> 443 (or configurable, or just take a net.Listener?)
@@ -210,6 +209,11 @@ type waitingConn struct {
 }
 
 func (wc *waitingConn) matches(otherWC *waitingConn) bool {
+	// Make sure these connections don't describe the same peer.
+	if wc.principal == otherWC.principal {
+		return false
+	}
+
 	// Check if wc wants to connect with otherWC.
 	if !wc.connectAny {
 		if _, ok := wc.connectPrincipals[otherWC.principal]; !ok {
