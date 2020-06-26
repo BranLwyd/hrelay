@@ -19,7 +19,6 @@ import (
 // TODO: support conn liveness checking (need to get to SyscallConn, I think meaning I need to keep the underlying connection rather than just a *tls.Conn)
 // TODO: make logging optional, off by default
 // TODO: need to ignore "already closed" error on close attempts? (as in rspd) [if so, repeatedly call errors.Unwrap until we get a syscall.Errno, then check if the errno is ENOTCONN?]
-// TODO: port 10443 -> 443 (or configurable, or just take a net.Listener?)
 
 type Server struct {
 	cfg *tls.Config
@@ -66,11 +65,15 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 	return &Server{cfg: tlsCFG}, nil
 }
 
-func (s *Server) ListenAndServe() error {
-	lst, err := net.Listen("tcp", ":10443")
+func (s *Server) ListenAndServe(addr string) error {
+	lst, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("couldn't listen: %w", err)
 	}
+	return s.Serve(lst)
+}
+
+func (s *Server) Serve(lst net.Listener) error {
 	defer lst.Close()
 	for {
 		conn, err := lst.Accept()

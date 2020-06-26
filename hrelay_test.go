@@ -56,7 +56,7 @@ func TestSimpleConnection(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Couldn't create server: %v", err)
 		}
-		if err := srv.ListenAndServe(); err != nil {
+		if err := srv.ListenAndServe(":10443"); err != nil {
 			t.Errorf("Server couldn't listen & serve: %v", err)
 		}
 	}()
@@ -66,17 +66,12 @@ func TestSimpleConnection(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		alice, err := NewClient(&ClientConfig{
-			ServerAddress:       "localhost:10443",
+		conn, peer, remainingConns, err := Dial("tcp", "localhost:10443", &ClientConfig{
+			ConnectPeerNames:    []string{"bob"},
 			IdentityCertificate: aliceC.tlsCertificate(),
 			ServerCAs:           caCP,
 			PeerCAs:             peerCP,
 		})
-		if err != nil {
-			t.Errorf("Couldn't create Alice client: %v", err)
-			return
-		}
-		conn, peer, remainingConns, err := alice.Connect("bob")
 		if err != nil {
 			t.Errorf("Couldn't connect to Bob: %v", err)
 			return
@@ -91,7 +86,7 @@ func TestSimpleConnection(t *testing.T) {
 		if _, err := conn.Write([]byte("Hello from Alice!")); err != nil {
 			t.Errorf("Couldn't write to Bob: %v", err)
 		}
-		if err := conn.(*tls.Conn).CloseWrite(); err != nil {
+		if err := conn.CloseWrite(); err != nil {
 			t.Errorf("Couldn't close-write connection to Bob: %v", err)
 		}
 		readBytes, err := ioutil.ReadAll(conn)
@@ -104,17 +99,12 @@ func TestSimpleConnection(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		bob, err := NewClient(&ClientConfig{
-			ServerAddress:       "localhost:10443",
+		conn, peer, remainingConns, err := Dial("tcp", "localhost:10443", &ClientConfig{
+			ConnectPeerNames:    []string{"alice"},
 			IdentityCertificate: bobC.tlsCertificate(),
 			ServerCAs:           caCP,
 			PeerCAs:             peerCP,
 		})
-		if err != nil {
-			t.Errorf("Couldn't create Bob client: %v", err)
-			return
-		}
-		conn, peer, remainingConns, err := bob.Connect("alice")
 		if err != nil {
 			t.Errorf("Couldn't connect to Alice: %v", err)
 			return
@@ -129,7 +119,7 @@ func TestSimpleConnection(t *testing.T) {
 		if _, err := conn.Write([]byte("Hello from Bob!")); err != nil {
 			t.Errorf("Couldn't write to Alice: %v", err)
 		}
-		if err := conn.(*tls.Conn).CloseWrite(); err != nil {
+		if err := conn.CloseWrite(); err != nil {
 			t.Errorf("Couldn't close-write connection to Alice: %v", err)
 		}
 		readBytes, err := ioutil.ReadAll(conn)

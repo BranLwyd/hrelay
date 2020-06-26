@@ -11,5 +11,5 @@ func main() {
 	if err != nil {
 		log.Fatalf("Couldn't create new hrelay server: %v", err)
 	}
-	log.Fatalf("Couldn't listen & serve: %v", srv.ListenAndServe())
+	log.Fatalf("Couldn't listen & serve: %v", srv.ListenAndServe(":443"))
 }

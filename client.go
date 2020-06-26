@@ -5,21 +5,34 @@ import (
 	"crypto/x509"
 	"fmt"
 	"net"
+	"strings"
+	"time"
 
 	pb "github.com/BranLwyd/hrelay/proto/hrelay_go_proto"
 )
 
-type Client struct {
-	name       string
-	serverAddr string
-	idCert     tls.Certificate
-	serverCAs  *x509.CertPool
-	peerCAs    *x509.CertPool
-}
+type Conn struct{ conn *tls.Conn }
+
+var _ net.Conn = &Conn{}
+
+// net.Conn methods.
+func (c *Conn) Read(b []byte) (n int, err error)   { return c.conn.Read(b) }
+func (c *Conn) Write(b []byte) (n int, err error)  { return c.conn.Write(b) }
+func (c *Conn) Close() error                       { return c.conn.Close() }
+func (c *Conn) LocalAddr() net.Addr                { return c.conn.LocalAddr() }
+func (c *Conn) RemoteAddr() net.Addr               { return c.conn.RemoteAddr() }
+func (c *Conn) SetDeadline(t time.Time) error      { return c.conn.SetDeadline(t) }
+func (c *Conn) SetReadDeadline(t time.Time) error  { return c.conn.SetReadDeadline(t) }
+func (c *Conn) SetWriteDeadline(t time.Time) error { return c.conn.SetWriteDeadline(t) }
+
+func (c *Conn) CloseWrite() error { return c.conn.CloseWrite() }
 
 type ClientConfig struct {
-	// ServerAddress is the address of the hrelay server to connect to.
-	ServerAddress string
+	// A list of peers that we want to connect to.
+	ConnectPeerNames []string
+
+	// If true, we will connect to any peer that wishes to connect to us.
+	ConnectAny bool
 
 	// IdentityCertificate is the client-authentication certificate proving this client's identity.
 	IdentityCertificate tls.Certificate
@@ -31,51 +44,55 @@ type ClientConfig struct {
 	PeerCAs *x509.CertPool
 }
 
-func NewClient(cfg *ClientConfig) (*Client, error) {
-	name, err := principal([][]*x509.Certificate{{cfg.IdentityCertificate.Leaf}})
-	if err != nil {
-		return nil, fmt.Errorf("couldn't determine client name from identity certificate: %w", err)
+func Dial(network, addr string, cfg *ClientConfig) (_ *Conn, peer string, remainingConns int64, _ error) {
+	// Determine server name from address.
+	cpos := strings.LastIndex(addr, ":")
+	if cpos == -1 {
+		cpos = len(addr)
 	}
+	serverName := addr[:cpos]
 
-	return &Client{
-		name:       name,
-		serverAddr: cfg.ServerAddress,
-		idCert:     cfg.IdentityCertificate,
-		serverCAs:  cfg.ServerCAs,
-		peerCAs:    cfg.PeerCAs,
-	}, nil
-}
-
-func (c *Client) Connect(principals ...string) (_ net.Conn, peer string, remainingConns int64, _ error) {
-	return c.connect(&pb.ConnectRequest{ConnectPrincipals: principals})
-}
-
-func (c *Client) ConnectAny() (_ net.Conn, peer string, remainingConns int64, _ error) {
-	return c.connect(&pb.ConnectRequest{ConnectAny: true})
-}
-
-func (c *Client) connect(req *pb.ConnectRequest) (_ net.Conn, peer string, remainingConns int64, retErr error) {
-	// Dial & handshake with server.
-	conn, err := tls.Dial("tcp", c.serverAddr, &tls.Config{
-		Certificates: []tls.Certificate{c.idCert},
-		MinVersion:   tls.VersionTLS13,
-		RootCAs:      c.serverCAs,
-		NextProtos:   []string{"hrelay"},
-	})
+	// Dial the server & connect to it.
+	conn, err := net.Dial(network, addr)
 	if err != nil {
-		return nil, "", 0, fmt.Errorf("couldn't dial server: %w", err)
+		return nil, "", 0, fmt.Errorf("couldn't dial: %w", err)
 	}
+	return Connect(conn, serverName, cfg)
+}
+
+func Connect(c net.Conn, serverName string, cfg *ClientConfig) (_ *Conn, peer string, remainingConns int64, retErr error) {
 	defer func() {
 		if retErr != nil {
-			conn.Close()
+			c.Close()
 		}
 	}()
+
+	// Determine our own name from our identity certificate.
+	name, err := principal([][]*x509.Certificate{{cfg.IdentityCertificate.Leaf}})
+	if err != nil {
+		return nil, "", 0, fmt.Errorf("couldn't determine client name from identity certificate: %w", err)
+	}
+
+	// Perform TLS handshake with server.
+	conn := tls.Client(c, &tls.Config{
+		Certificates: []tls.Certificate{cfg.IdentityCertificate},
+		MinVersion:   tls.VersionTLS13,
+		ServerName:   serverName,
+		RootCAs:      cfg.ServerCAs,
+		NextProtos:   []string{"hrelay"},
+	})
+	if err := conn.Handshake(); err != nil {
+		return nil, "", 0, fmt.Errorf("handshake failure with server: %w", err)
+	}
 	if cs := conn.ConnectionState(); !cs.NegotiatedProtocolIsMutual || cs.NegotiatedProtocol != "hrelay" {
-		return nil, "", 0, fmt.Errorf("protocol negotiation failure (protocol = %q, mutual = %v)", cs.NegotiatedProtocol, cs.NegotiatedProtocolIsMutual)
+		return nil, "", 0, fmt.Errorf("protocol negotiation failure")
 	}
 
 	// Send request, read response. This might be waiting for a while if no peer is available.
-	if err := writeMessage(conn, req); err != nil {
+	if err := writeMessage(conn, &pb.ConnectRequest{
+		ConnectPrincipals: cfg.ConnectPeerNames,
+		ConnectAny:        cfg.ConnectAny,
+	}); err != nil {
 		return nil, "", 0, fmt.Errorf("couldn't write connection request: %w", err)
 	}
 	var resp pb.ConnectResponse
@@ -84,9 +101,14 @@ func (c *Client) connect(req *pb.ConnectRequest) (_ net.Conn, peer string, remai
 	}
 
 	// Make sure the peer the server connected us to is one that we want.
-	if !req.ConnectAny {
+	if !cfg.ConnectAny {
 		peerIsRequested := false
-		for _, p := range req.ConnectPrincipals {
+		for _, p := range cfg.ConnectPeerNames {
+			if p == name {
+				// Don't accept connections to ourselves, even if specified.
+				// (This would break peer-to-peer client/server determination below.)
+				continue
+			}
 			if resp.ConnectedPrincipal == p {
 				peerIsRequested = true
 				break
@@ -97,13 +119,13 @@ func (c *Client) connect(req *pb.ConnectRequest) (_ net.Conn, peer string, remai
 		}
 	}
 
-	// Perform peer-to-peer handshake to verify peer.
-	if isServer := c.name < resp.ConnectedPrincipal; isServer {
+	// Perform peer-to-peer TLS handshake to verify peer.
+	if isServer := name < resp.ConnectedPrincipal; isServer {
 		conn = tls.Server(conn, &tls.Config{
-			Certificates: []tls.Certificate{c.idCert},
+			Certificates: []tls.Certificate{cfg.IdentityCertificate},
 			MinVersion:   tls.VersionTLS13,
 			ClientAuth:   tls.RequireAndVerifyClientCert,
-			ClientCAs:    c.peerCAs,
+			ClientCAs:    cfg.PeerCAs,
 
 			VerifyPeerCertificate: func(_ [][]byte, verifiedChains [][]*x509.Certificate) error {
 				p, err := principal(verifiedChains)
@@ -118,15 +140,15 @@ func (c *Client) connect(req *pb.ConnectRequest) (_ net.Conn, peer string, remai
 		})
 	} else {
 		conn = tls.Client(conn, &tls.Config{
-			Certificates: []tls.Certificate{c.idCert},
+			Certificates: []tls.Certificate{cfg.IdentityCertificate},
 			MinVersion:   tls.VersionTLS13,
 			ServerName:   resp.ConnectedPrincipal,
-			RootCAs:      c.peerCAs,
+			RootCAs:      cfg.PeerCAs,
 		})
 	}
 	if err := conn.Handshake(); err != nil {
-		return nil, "", 0, fmt.Errorf("couldn't handshake with peer: %w", err)
+		return nil, "", 0, fmt.Errorf("handshake failure with peer: %w", err)
 	}
 
-	return conn, resp.ConnectedPrincipal, resp.RemainingConnections, nil
+	return &Conn{conn}, resp.ConnectedPrincipal, resp.RemainingConnections, nil
 }
