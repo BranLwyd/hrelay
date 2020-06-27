@@ -8,7 +8,9 @@ import (
 	"crypto/x509/pkix"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"math/big"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -52,6 +54,7 @@ func TestSimpleConnection(t *testing.T) {
 		srv, err := NewServer(&ServerConfig{
 			Certificate: srvC.tlsCertificate(),
 			ClientCAs:   peerCP,
+			Logger:      log.New(os.Stderr, "", log.LstdFlags),
 		})
 		if err != nil {
 			t.Fatalf("Couldn't create server: %v", err)

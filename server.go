@@ -17,11 +17,11 @@ import (
 // TODO: shutdown
 // TODO: add acme support (need to support GetCertificate, specifying additional NextProtos)
 // TODO: support conn liveness checking (need to get to SyscallConn, I think meaning I need to keep the underlying connection rather than just a *tls.Conn)
-// TODO: make logging optional, off by default
 // TODO: need to ignore "already closed" error on close attempts? (as in rspd) [if so, repeatedly call errors.Unwrap until we get a syscall.Errno, then check if the errno is ENOTCONN?]
 
 type Server struct {
-	cfg *tls.Config
+	cfg    *tls.Config
+	logger *log.Logger
 
 	mu      sync.Mutex // protects waiters
 	waiters []*waitingConn
@@ -33,6 +33,9 @@ type ServerConfig struct {
 
 	// ClientCAs corresponds to tls.Config's ClientCAs.
 	ClientCAs *x509.CertPool
+
+	// If set, the server will log information about its operations to this logger.
+	Logger *log.Logger
 }
 
 func NewServer(cfg *ServerConfig) (*Server, error) {
@@ -62,7 +65,7 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 		},
 	}
 
-	return &Server{cfg: tlsCFG}, nil
+	return &Server{cfg: tlsCFG, logger: cfg.Logger}, nil
 }
 
 func (s *Server) ListenAndServe(addr string) error {
@@ -253,12 +256,18 @@ type waiterMsg struct {
 }
 
 func (s *Server) log(format string, v ...interface{}) {
-	log.Printf(format, v...)
+	if s.logger == nil {
+		return
+	}
+	s.logger.Printf(format, v...)
 }
 
 func (s *Server) clog(conn net.Conn, format string, v ...interface{}) {
+	if s.logger == nil {
+		return
+	}
 	newV := make([]interface{}, 1+len(v))
 	newV[0] = conn.RemoteAddr()
 	copy(newV[1:], v)
-	s.log("[%s] "+format, newV...)
+	s.logger.Printf("[%s] "+format, newV...)
 }
