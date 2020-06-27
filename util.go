@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"syscall"
 
 	"github.com/golang/protobuf/proto"
@@ -63,15 +62,10 @@ func principal(verifiedChains [][]*x509.Certificate) (string, error) {
 	return principal, nil
 }
 
-func isConnOpen(conn net.Conn) (bool, error) {
-	// Adapted from https://stackoverflow.com/a/58664631
-	rc, err := conn.(syscall.Conn).SyscallConn()
-	if err != nil {
-		return false, fmt.Errorf("couldn't get raw connection: %w", err)
-	}
+func isConnOpen(conn syscall.RawConn) (bool, error) {
 	isOpen := true
 	var sysErr error
-	if err := rc.Read(func(fd uintptr) bool {
+	if err := conn.Read(func(fd uintptr) bool {
 		var buf [1]byte
 		n, _, err := syscall.Recvfrom(int(fd), buf[:], syscall.MSG_PEEK|syscall.MSG_DONTWAIT)
 		switch {

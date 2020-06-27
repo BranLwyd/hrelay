@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"sync"
+	"syscall"
 	"time"
 
 	pb "github.com/BranLwyd/hrelay/proto/hrelay_go_proto"
@@ -16,7 +17,6 @@ import (
 
 // TODO: shutdown
 // TODO: add acme support (need to support GetCertificate, specifying additional NextProtos)
-// TODO: support conn liveness checking (need to get to SyscallConn, I think meaning I need to keep the underlying connection rather than just a *tls.Conn)
 // TODO: need to ignore "already closed" error on close attempts? (as in rspd) [if so, repeatedly call errors.Unwrap until we get a syscall.Errno, then check if the errno is ENOTCONN?]
 
 type Server struct {
@@ -83,11 +83,12 @@ func (s *Server) Serve(lst net.Listener) error {
 		if err != nil {
 			return fmt.Errorf("couldn't accept: %w", err)
 		}
-		go s.handleConnection(tls.Server(conn, s.cfg))
+		go s.handleConnection(conn)
 	}
 }
 
-func (s *Server) handleConnection(conn *tls.Conn) {
+func (s *Server) handleConnection(c net.Conn) {
+	conn := tls.Server(c, s.cfg)
 	s.clog(conn, "New connection")
 	defer func() {
 		if err := conn.Close(); err != nil {
@@ -96,6 +97,18 @@ func (s *Server) handleConnection(conn *tls.Conn) {
 			s.clog(conn, "Connection closed")
 		}
 	}()
+
+	// Retrieve the underlying syscall.RawConn, if possible. This is required for connection liveness checking.
+	var rawConn syscall.RawConn
+	if sc, ok := c.(syscall.Conn); ok {
+		rc, err := sc.SyscallConn()
+		if err != nil {
+			s.clog(conn, "Couldn't get raw connection: %v", err)
+		}
+		rawConn = rc
+	} else {
+		s.clog(conn, "Can't make syscalls on this connection; liveness checking is disabled")
+	}
 
 	// Perform TLS handshake and determine principal.
 	// Until the connection is authenticated via the handshake, we set a read/write deadline to mitigate DoS attempts.
@@ -125,7 +138,7 @@ func (s *Server) handleConnection(conn *tls.Conn) {
 		return
 	}
 
-	otherPrincipal, otherConn, closeWG, totalMatches, err := s.findPairedConnection(principal, conn, req)
+	otherPrincipal, otherConn, closeWG, totalMatches, err := s.findPairedConnection(principal, conn, rawConn, req)
 	if err != nil {
 		s.clog(conn, "Couldn't pair with another connection: %v", err)
 		return
@@ -154,7 +167,7 @@ func (s *Server) handleConnection(conn *tls.Conn) {
 	}
 }
 
-func (s *Server) findPairedConnection(principal string, conn *tls.Conn, req *pb.ConnectRequest) (otherPrincipal string, _ *tls.Conn, closeWG *sync.WaitGroup, totalMatches int, _ error) {
+func (s *Server) findPairedConnection(principal string, conn *tls.Conn, rawConn syscall.RawConn, req *pb.ConnectRequest) (otherPrincipal string, _ *tls.Conn, closeWG *sync.WaitGroup, totalMatches int, _ error) {
 	// Prepare our waitingConn.
 	connectPrincipals := map[string]struct{}{}
 	for _, p := range req.ConnectPrincipals {
@@ -166,7 +179,18 @@ func (s *Server) findPairedConnection(principal string, conn *tls.Conn, req *pb.
 		connectAny:        req.ConnectAny,
 		connectPrincipals: connectPrincipals,
 		conn:              conn,
+		rawConn:           rawConn,
 		ch:                waitCh,
+	}
+
+	removeWaiter := func(i int, err error) *waitingConn {
+		wc := s.waiters[i]
+		if err != nil {
+			s.waiters[i].ch <- waiterMsg{"", nil, nil, err}
+		}
+		s.waiters[i], s.waiters[len(s.waiters)-1] = s.waiters[len(s.waiters)-1], s.waiters[i]
+		s.waiters = s.waiters[:len(s.waiters)-1]
+		return wc
 	}
 
 	// Try to find a matching connection among waiting connections.
@@ -174,19 +198,16 @@ func (s *Server) findPairedConnection(principal string, conn *tls.Conn, req *pb.
 	s.mu.Lock()
 	i, matchIdx := 0, -1
 	for i < len(s.waiters) {
-		//isOpen, err := isConnOpen(s.waiters[i].conn) // XXX
-		isOpen, err := true, error(nil) // XXX
-		if err != nil {
-			s.waiters[i].ch <- waiterMsg{"", nil, nil, fmt.Errorf("couldn't check connection liveness: %w", err)}
-			s.waiters[i], s.waiters[len(s.waiters)-1] = s.waiters[len(s.waiters)-1], s.waiters[i]
-			s.waiters = s.waiters[:len(s.waiters)-1]
-			continue
-		}
-		if !isOpen {
-			s.waiters[i].ch <- waiterMsg{"", nil, nil, errors.New("client closed connection")}
-			s.waiters[i], s.waiters[len(s.waiters)-1] = s.waiters[len(s.waiters)-1], s.waiters[i]
-			s.waiters = s.waiters[:len(s.waiters)-1]
-			continue
+		if s.waiters[i].rawConn != nil {
+			isOpen, err := isConnOpen(s.waiters[i].rawConn)
+			if err != nil {
+				removeWaiter(i, fmt.Errorf("couldn't check connection liveness: %w", err))
+				continue
+			}
+			if !isOpen {
+				removeWaiter(i, errors.New("client closed connection"))
+				continue
+			}
 		}
 
 		if wc.matches(s.waiters[i]) {
@@ -197,8 +218,7 @@ func (s *Server) findPairedConnection(principal string, conn *tls.Conn, req *pb.
 	}
 	if matchIdx != -1 {
 		// We found a match! Pair our connection up with the matching waiter.
-		otherWC := s.waiters[matchIdx]
-		s.waiters[matchIdx], s.waiters = s.waiters[len(s.waiters)-1], s.waiters[:len(s.waiters)-1]
+		otherWC := removeWaiter(matchIdx, nil)
 		s.mu.Unlock()
 
 		wg := &sync.WaitGroup{}
@@ -221,8 +241,9 @@ type waitingConn struct {
 	connectAny        bool
 	connectPrincipals map[string]struct{}
 
-	conn *tls.Conn
-	ch   chan<- waiterMsg
+	conn    *tls.Conn
+	rawConn syscall.RawConn // May be nil, if conn not backed by a syscall.RawConn. This disables connection-liveness testing.
+	ch      chan<- waiterMsg
 }
 
 func (wc *waitingConn) matches(otherWC *waitingConn) bool {
