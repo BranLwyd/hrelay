@@ -186,10 +186,9 @@ func (s *Server) findPairedConnection(principal string, conn *tls.Conn, rawConn 
 	removeWaiter := func(i int, err error) *waitingConn {
 		wc := s.waiters[i]
 		if err != nil {
-			s.waiters[i].ch <- waiterMsg{"", nil, nil, err}
+			wc.ch <- waiterMsg{"", nil, nil, err}
 		}
-		s.waiters[i], s.waiters[len(s.waiters)-1] = s.waiters[len(s.waiters)-1], s.waiters[i]
-		s.waiters = s.waiters[:len(s.waiters)-1]
+		s.waiters[i], s.waiters = s.waiters[len(s.waiters)-1], s.waiters[:len(s.waiters)-1]
 		return wc
 	}
 
