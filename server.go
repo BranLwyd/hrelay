@@ -15,7 +15,6 @@ import (
 	pb "github.com/BranLwyd/hrelay/proto/hrelay_go_proto"
 )
 
-// TODO: add acme support (need to support GetCertificate, specifying additional NextProtos)
 // TODO: need to ignore "already closed" error on close attempts? (as in rspd) [if so, repeatedly call errors.Unwrap until we get a syscall.Errno, then check if the errno is ENOTCONN?]
 
 type Server struct {
@@ -30,8 +29,15 @@ type Server struct {
 }
 
 type ServerConfig struct {
-	// Certificate corresponds to tls.Config's Certificates.
-	Certificate tls.Certificate
+	// Certificates corresponds to tls.Config's Certificates.
+	Certificates []tls.Certificate
+
+	// GetCertificate corresponds to tls.Config's GetCertificate.
+	GetCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)
+
+	// NextProtos allows specification of additional next-proto values for the server.
+	// It is primarily intended to allow use of the acme/autocert package.
+	NextProtos []string
 
 	// ClientCAs corresponds to tls.Config's ClientCAs.
 	ClientCAs *x509.CertPool
@@ -44,13 +50,27 @@ var ErrShutdown = errors.New("server shut down")
 
 func NewServer(cfg *ServerConfig) (*Server, error) {
 	// Set up TLS configuration.
+	nps := map[string]struct{}{}
+	for _, np := range cfg.NextProtos {
+		nps[np] = struct{}{}
+	}
+
 	tlsCFG := &tls.Config{
 		GetConfigForClient: func(hi *tls.ClientHelloInfo) (*tls.Config, error) {
 			// Determine the client-requested protocol to use.
+			// Always prefer the "hrelay" protocol if available; use config-supplied additional
+			// protocols only if "hrelay" is unavailable, taking the protocol most preferred by
+			// the client.
 			negotiatedProtocol := ""
 			for _, proto := range hi.SupportedProtos {
 				if proto == "hrelay" {
 					negotiatedProtocol = proto
+					break
+				}
+				if negotiatedProtocol == "" {
+					if _, ok := nps[proto]; ok {
+						negotiatedProtocol = proto
+					}
 				}
 			}
 			if negotiatedProtocol == "" {
@@ -60,11 +80,12 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 			}
 
 			return &tls.Config{
-				Certificates: []tls.Certificate{cfg.Certificate},
-				MinVersion:   tls.VersionTLS13,
-				ClientAuth:   tls.RequireAndVerifyClientCert,
-				ClientCAs:    cfg.ClientCAs,
-				NextProtos:   []string{negotiatedProtocol},
+				Certificates:   cfg.Certificates,
+				GetCertificate: cfg.GetCertificate,
+				MinVersion:     tls.VersionTLS13,
+				ClientAuth:     tls.RequireAndVerifyClientCert,
+				ClientCAs:      cfg.ClientCAs,
+				NextProtos:     []string{negotiatedProtocol},
 			}, nil
 		},
 	}

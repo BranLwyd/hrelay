@@ -53,9 +53,9 @@ func TestSimpleConnection(t *testing.T) {
 	var srvWG sync.WaitGroup
 	srvWG.Add(1)
 	srv, err := NewServer(&ServerConfig{
-		Certificate: srvC.tlsCertificate(),
-		ClientCAs:   peerCP,
-		Logger:      log.New(os.Stderr, "", log.LstdFlags),
+		Certificates: []tls.Certificate{srvC.tlsCertificate()},
+		ClientCAs:    peerCP,
+		Logger:       log.New(os.Stderr, "", log.LstdFlags),
 	})
 	if err != nil {
 		t.Fatalf("Couldn't create server: %v", err)
