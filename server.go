@@ -15,7 +15,6 @@ import (
 	pb "github.com/BranLwyd/hrelay/proto/hrelay_go_proto"
 )
 
-// TODO: shutdown
 // TODO: add acme support (need to support GetCertificate, specifying additional NextProtos)
 // TODO: need to ignore "already closed" error on close attempts? (as in rspd) [if so, repeatedly call errors.Unwrap until we get a syscall.Errno, then check if the errno is ENOTCONN?]
 
@@ -23,8 +22,11 @@ type Server struct {
 	cfg    *tls.Config
 	logger *log.Logger
 
-	mu      sync.Mutex // protects waiters
-	waiters []*waitingConn
+	mu          sync.Mutex    // protects state below
+	doneCh      chan struct{} // closed on start of shutdown; must hold mu to close
+	listeners   map[*net.Listener]struct{}
+	activeConns map[*tls.Conn]struct{}
+	waiters     []*waitingConn
 }
 
 type ServerConfig struct {
@@ -37,6 +39,8 @@ type ServerConfig struct {
 	// If set, the server will log information about its operations to this logger.
 	Logger *log.Logger
 }
+
+var ErrShutdown = errors.New("server shut down")
 
 func NewServer(cfg *ServerConfig) (*Server, error) {
 	// Set up TLS configuration.
@@ -65,7 +69,13 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 		},
 	}
 
-	return &Server{cfg: tlsCFG, logger: cfg.Logger}, nil
+	return &Server{
+		cfg:         tlsCFG,
+		logger:      cfg.Logger,
+		doneCh:      make(chan struct{}),
+		listeners:   map[*net.Listener]struct{}{},
+		activeConns: map[*tls.Conn]struct{}{},
+	}, nil
 }
 
 func (s *Server) ListenAndServe(addr string) error {
@@ -78,25 +88,96 @@ func (s *Server) ListenAndServe(addr string) error {
 
 func (s *Server) Serve(lst net.Listener) error {
 	defer lst.Close()
+
+	// Register listener (checking that the server has not already been shut down).
+	s.mu.Lock()
+	select {
+	case <-s.doneCh:
+		s.mu.Unlock()
+		return ErrShutdown
+	default:
+		// Continue processing.
+	}
+	s.listeners[&lst] = struct{}{}
+	defer func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		delete(s.listeners, &lst)
+	}()
+	s.mu.Unlock()
+
+	// Begin accepting connections.
 	for {
 		conn, err := lst.Accept()
 		if err != nil {
-			return fmt.Errorf("couldn't accept: %w", err)
+			select {
+			case <-s.doneCh:
+				return ErrShutdown
+			default:
+				return fmt.Errorf("couldn't accept: %w", err)
+			}
 		}
 		go s.handleConnection(conn)
 	}
+}
+
+func (s *Server) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	select {
+	case <-s.doneCh:
+		// The channel is already closed; Close has already been called.
+		return nil
+	default:
+		// Continue processing.
+		close(s.doneCh)
+	}
+
+	// Close listeners.
+	var lstErr error
+	for lst := range s.listeners {
+		if err := (*lst).Close(); err != nil {
+			lstErr = err
+		}
+		delete(s.listeners, lst)
+	}
+
+	// Close active connections.
+	for conn := range s.activeConns {
+		conn.Close()
+		delete(s.activeConns, conn)
+	}
+
+	return lstErr
 }
 
 func (s *Server) handleConnection(c net.Conn) {
 	conn := tls.Server(c, s.cfg)
 	s.clog(conn, "New connection")
 	defer func() {
-		if err := conn.Close(); err != nil {
+		if err := c.Close(); err != nil {
 			s.clog(conn, "Error while closing connection: %v", err)
 		} else {
 			s.clog(conn, "Connection closed")
 		}
 	}()
+
+	// Register connection (checking that we have not already been shut down).
+	s.mu.Lock()
+	select {
+	case <-s.doneCh:
+		s.mu.Unlock()
+		return
+	default:
+		// Continue processing.
+	}
+	s.activeConns[conn] = struct{}{}
+	defer func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		delete(s.activeConns, conn)
+	}()
+	s.mu.Unlock()
 
 	// Retrieve the underlying syscall.RawConn, if possible. This is required for connection liveness checking.
 	var rawConn syscall.RawConn
@@ -231,8 +312,12 @@ func (s *Server) findPairedConnection(principal string, conn *tls.Conn, rawConn 
 	s.waiters = append(s.waiters, wc)
 	s.mu.Unlock()
 
-	wm := <-waitCh
-	return wm.principal, wm.conn, wm.wg, 1, wm.err
+	select {
+	case <-s.doneCh: // Server shutdown.
+		return "", nil, nil, 0, ErrShutdown
+	case wm := <-waitCh: // Successfully paired with another connection.
+		return wm.principal, wm.conn, wm.wg, 1, wm.err
+	}
 }
 
 type waitingConn struct {

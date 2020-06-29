@@ -50,25 +50,27 @@ func TestSimpleConnection(t *testing.T) {
 	peerCP.AddCert(pcaC.cert)
 
 	// Create server & clients.
+	var srvWG sync.WaitGroup
+	srvWG.Add(1)
+	srv, err := NewServer(&ServerConfig{
+		Certificate: srvC.tlsCertificate(),
+		ClientCAs:   peerCP,
+		Logger:      log.New(os.Stderr, "", log.LstdFlags),
+	})
+	if err != nil {
+		t.Fatalf("Couldn't create server: %v", err)
+	}
 	go func() {
-		srv, err := NewServer(&ServerConfig{
-			Certificate: srvC.tlsCertificate(),
-			ClientCAs:   peerCP,
-			Logger:      log.New(os.Stderr, "", log.LstdFlags),
-		})
-		if err != nil {
-			t.Fatalf("Couldn't create server: %v", err)
-		}
-		if err := srv.ListenAndServe(":10443"); err != nil {
+		defer srvWG.Done()
+		if err := srv.ListenAndServe(":10443"); err != nil && err != ErrShutdown {
 			t.Errorf("Server couldn't listen & serve: %v", err)
 		}
 	}()
 
-	var wg sync.WaitGroup
-	wg.Add(2)
-
+	var cliWG sync.WaitGroup
+	cliWG.Add(2)
 	go func() {
-		defer wg.Done()
+		defer cliWG.Done()
 		conn, peer, remainingConns, err := Dial("tcp", "localhost:10443", &ClientConfig{
 			ConnectPeerNames:    []string{"bob"},
 			IdentityCertificate: aliceC.tlsCertificate(),
@@ -101,7 +103,7 @@ func TestSimpleConnection(t *testing.T) {
 	}()
 
 	go func() {
-		defer wg.Done()
+		defer cliWG.Done()
 		conn, peer, remainingConns, err := Dial("tcp", "localhost:10443", &ClientConfig{
 			ConnectPeerNames:    []string{"alice"},
 			IdentityCertificate: bobC.tlsCertificate(),
@@ -133,7 +135,11 @@ func TestSimpleConnection(t *testing.T) {
 		}
 	}()
 
-	wg.Wait()
+	cliWG.Wait()
+	if err := srv.Close(); err != nil {
+		t.Errorf("Couldn't close server: %v", err)
+	}
+	srvWG.Wait()
 }
 
 type certKey struct {
