@@ -15,8 +15,6 @@ import (
 	pb "github.com/BranLwyd/hrelay/proto/hrelay_go_proto"
 )
 
-// TODO: need to ignore "already closed" error on close attempts? (as in rspd) [if so, repeatedly call errors.Unwrap until we get a syscall.Errno, then check if the errno is ENOTCONN?]
-
 type Server struct {
 	cfg    *tls.Config
 	logger *log.Logger
@@ -176,7 +174,7 @@ func (s *Server) handleConnection(c net.Conn) {
 	conn := tls.Server(c, s.cfg)
 	s.clog(conn, "New connection")
 	defer func() {
-		if err := c.Close(); err != nil {
+		if err := conn.Close(); err != nil && !isAlreadyClosed(err) {
 			s.clog(conn, "Error while closing connection: %v", err)
 		} else {
 			s.clog(conn, "Connection closed")

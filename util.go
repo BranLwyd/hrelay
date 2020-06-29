@@ -80,3 +80,14 @@ func isConnOpen(conn syscall.RawConn) (bool, error) {
 	}
 	return isOpen, sysErr
 }
+
+func isAlreadyClosed(err error) bool {
+	for err != nil {
+		// TODO: replace this gross hack if/when it becomes possible to do so
+		if err.Error() == "use of closed network connection" || err.Error() == "tls: use of closed connection" {
+			return true
+		}
+		err = errors.Unwrap(err)
+	}
+	return false
+}

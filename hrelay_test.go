@@ -140,6 +140,8 @@ func TestSimpleConnection(t *testing.T) {
 		t.Errorf("Couldn't close server: %v", err)
 	}
 	srvWG.Wait()
+
+	time.Sleep(5 * time.Second) // XXX
 }
 
 type certKey struct {
