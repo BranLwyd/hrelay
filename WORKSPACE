@@ -41,3 +41,21 @@ gazelle_dependencies()
 rules_proto_dependencies()
 
 rules_proto_toolchains()
+
+go_repository(
+    name = "org_golang_x_crypto",
+    commit = "75b288015ac94e66e3d6715fb68a9b41bf046ec2",
+    importpath = "golang.org/x/crypto",
+)
+
+go_repository(
+    name = "org_golang_x_net",
+    commit = "4c5254603344ea4a8ae4bed7e296a9588303e14f",
+    importpath = "golang.org/x/net",
+)
+
+go_repository(
+    name = "org_golang_x_text",
+    commit = "23ae387dee1f90d29a23c0e87ee0b46038fbed0e",
+    importpath = "golang.org/x/text",
+)

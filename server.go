@@ -46,7 +46,7 @@ type ServerConfig struct {
 
 var ErrShutdown = errors.New("server shut down")
 
-func NewServer(cfg *ServerConfig) (*Server, error) {
+func NewServer(cfg *ServerConfig) *Server {
 	// Set up TLS configuration.
 	nps := map[string]struct{}{}
 	for _, np := range cfg.NextProtos {
@@ -94,7 +94,7 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 		doneCh:      make(chan struct{}),
 		listeners:   map[*net.Listener]struct{}{},
 		activeConns: map[*tls.Conn]struct{}{},
-	}, nil
+	}
 }
 
 func (s *Server) ListenAndServe(addr string) error {

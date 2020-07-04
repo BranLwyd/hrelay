@@ -52,14 +52,11 @@ func TestSimpleConnection(t *testing.T) {
 	// Create server & clients.
 	var srvWG sync.WaitGroup
 	srvWG.Add(1)
-	srv, err := NewServer(&ServerConfig{
+	srv := NewServer(&ServerConfig{
 		Certificates: []tls.Certificate{srvC.tlsCertificate()},
 		ClientCAs:    peerCP,
 		Logger:       log.New(os.Stderr, "", log.LstdFlags),
 	})
-	if err != nil {
-		t.Fatalf("Couldn't create server: %v", err)
-	}
 	go func() {
 		defer srvWG.Done()
 		if err := srv.ListenAndServe(":10443"); err != nil && err != ErrShutdown {
