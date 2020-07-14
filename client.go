@@ -101,14 +101,14 @@ func Connect(c net.Conn, serverName string, cfg *ClientConfig) (_ *Conn, peer st
 	}
 
 	// Make sure the peer the server connected us to is one that we want.
+	if resp.ConnectedPrincipal == name {
+		// Don't accept connections to ourselves, even if specified.
+		// (This would break peer-to-peer client/server determination below.)
+		return nil, "", 0, fmt.Errorf("server attempted self-connection")
+	}
 	if !cfg.ConnectAny {
 		peerIsRequested := false
 		for _, p := range cfg.ConnectPeerNames {
-			if p == name {
-				// Don't accept connections to ourselves, even if specified.
-				// (This would break peer-to-peer client/server determination below.)
-				continue
-			}
 			if resp.ConnectedPrincipal == p {
 				peerIsRequested = true
 				break
