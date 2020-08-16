@@ -168,6 +168,7 @@ func serverCert(signer certKey, serverName string) (certKey, error) {
 		Subject: pkix.Name{
 			CommonName: serverName,
 		},
+		DNSNames:    []string{serverName},
 		KeyUsage:    x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	})
@@ -178,6 +179,7 @@ func principalCert(signer certKey, principalName string) (certKey, error) {
 		Subject: pkix.Name{
 			CommonName: principalName,
 		},
+		DNSNames:    []string{principalName},
 		KeyUsage:    x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 	})

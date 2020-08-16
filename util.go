@@ -46,14 +46,15 @@ func writeMessage(w io.Writer, msg proto.Message) error {
 func principal(verifiedChains [][]*x509.Certificate) (string, error) {
 	var principal string
 	for _, chain := range verifiedChains {
-		p := chain[0].Subject.CommonName
-		switch {
-		case p == "":
-			continue
-		case principal == "":
-			principal = p
-		case principal != p:
-			return "", fmt.Errorf("multiple principals in supplied client certificates (%q & %q)", principal, p)
+		for _, name := range chain[0].DNSNames {
+			switch {
+			case name == "":
+				continue
+			case principal == "":
+				principal = name
+			case principal != name:
+				return "", fmt.Errorf("multiple principals in supplied client certificates (%q & %q)", principal, name)
+			}
 		}
 	}
 	if principal == "" {
