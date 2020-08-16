@@ -2,10 +2,10 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
 http_archive(
     name = "io_bazel_rules_go",
-    sha256 = "a8d6b1b354d371a646d2f7927319974e0f9e52f73a2452d2b3877118169eb6bb",
+    sha256 = "2697f6bc7c529ee5e6a2d9799870b9ec9eaeb3ee7d70ed50b87a2c2c97e13d9e",
     urls = [
-        "https://mirror.bazel.build/github.com/bazelbuild/rules_go/releases/download/v0.23.3/rules_go-v0.23.3.tar.gz",
-        "https://github.com/bazelbuild/rules_go/releases/download/v0.23.3/rules_go-v0.23.3.tar.gz",
+        "https://mirror.bazel.build/github.com/bazelbuild/rules_go/releases/download/v0.23.8/rules_go-v0.23.8.tar.gz",
+        "https://github.com/bazelbuild/rules_go/releases/download/v0.23.8/rules_go-v0.23.8.tar.gz",
     ],
 )
 
@@ -44,13 +44,13 @@ rules_proto_toolchains()
 
 go_repository(
     name = "org_golang_x_crypto",
-    commit = "75b288015ac94e66e3d6715fb68a9b41bf046ec2",
+    commit = "123391ffb6de907695e1066dc40c1ff09322aeb6",
     importpath = "golang.org/x/crypto",
 )
 
 go_repository(
     name = "org_golang_x_net",
-    commit = "4c5254603344ea4a8ae4bed7e296a9588303e14f",
+    commit = "3edf25e44fccea9e11b919341e952fca722ef460",
     importpath = "golang.org/x/net",
 )
 
